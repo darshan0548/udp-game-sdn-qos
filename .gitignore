@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Experiment output (regenerate with run_all.sh; copy final figures to report/figures/)
+measurement/logs/*.csv
+measurement/graphs/*.png
+measurement/results/*.csv
+*.pcap
+*.log
