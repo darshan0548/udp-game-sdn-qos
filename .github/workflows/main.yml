@@ -33,6 +33,7 @@ jobs:
           grep -q "def build" sdn/topology.py || { echo "sdn/topology.py has no build()"; exit 1; }
 
       - name: Game on localhost
+        timeout-minutes: 3
         run: |
           cd measurement
           python3 game_runner.py server --host 127.0.0.1 --log /tmp/smoke.csv --duration 10 > /tmp/smoke_server.txt 2>&1 &
@@ -44,6 +45,7 @@ jobs:
           python3 metrics.py /tmp/smoke.csv
 
       - name: Mininet check
+        timeout-minutes: 3
         run: sudo mn --test pingall
 
       - name: Run all scenarios
