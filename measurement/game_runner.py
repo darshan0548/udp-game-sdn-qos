@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+import signal
 import socket
 import sys
 import threading
@@ -18,6 +19,7 @@ parser.add_argument("--log", default="game_log.csv")
 parser.add_argument("--duration", type=float, default=0)
 args, rest = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + rest
+signal.signal(signal.SIGINT, signal.default_int_handler)
 
 
 def stop():
