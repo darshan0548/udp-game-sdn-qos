@@ -1,0 +1,65 @@
+name: Run experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Runs per scenario (1 for a first test, 3 for final)"
+        default: "1"
+      duration:
+        description: "Seconds per run (15 for a first test, 60 for final)"
+        default: "15"
+
+jobs:
+  experiments:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mininet openvswitch-switch iperf python3-pip
+          sudo pip3 install ryu "eventlet==0.30.2" pandas matplotlib numpy
+          sudo service openvswitch-switch start || true
+          sudo modprobe openvswitch || true
+
+      - name: Check files
+        run: |
+          for f in game/server.py game/client.py game/protocol.py sdn/topology.py sdn/controller_qos.py sdn/setup_queues.sh; do
+            test -f "$f" || { echo "MISSING FILE: $f"; exit 1; }
+          done
+          grep -q "def build" sdn/topology.py || { echo "sdn/topology.py has no build()"; exit 1; }
+
+      - name: Game on localhost
+        run: |
+          cd measurement
+          python3 game_runner.py server --host 127.0.0.1 --log /tmp/smoke.csv --duration 10 > /tmp/smoke_server.txt 2>&1 &
+          sleep 1
+          for n in 1 2 3; do
+            python3 game_runner.py client --name P$n --duration 8 > /tmp/smoke_client$n.txt 2>&1 &
+          done
+          wait
+          python3 metrics.py /tmp/smoke.csv
+
+      - name: Mininet check
+        run: sudo mn --test pingall
+
+      - name: Run all scenarios
+        run: |
+          cd measurement
+          sudo env "PATH=$PATH" ./run_all.sh "${{ inputs.runs }}" "${{ inputs.duration }}"
+
+      - name: Save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: |
+            measurement/logs/
+            measurement/graphs/
+            measurement/results/
+            /tmp/*.txt
+            /tmp/smoke.csv
+          if-no-files-found: warn
