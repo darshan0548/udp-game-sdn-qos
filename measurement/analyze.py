@@ -1,143 +1,74 @@
-"""
-analyze.py - read every CSV in logs/, compute metrics, make graphs + summary table.
-
-File naming (made by run_experiment.py / fake_data.py):
-    logs/<scenario>_run<N>.csv      scenarios: baseline, congested_noqos, congested_qos
-
-Outputs:
-    graphs/latency_over_time.png    (run 1 of each scenario)
-    graphs/latency_cdf.png          (all runs pooled per scenario)
-    graphs/latency_boxplot.png
-    graphs/jitter_bar.png           (mean over runs, error bar = std)
-    graphs/loss_bar.png
-    results/summary_per_run.csv
-    results/summary_table.csv       (mean over runs, goes in the report)
-
-Usage:
-    python analyze.py
-"""
 import glob
 import os
-import re
-
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+from metrics import load, summary
 
-from metrics import load_log, summarize
+names = ["baseline", "noqos", "qos"]
+labels = {"baseline": "No load", "noqos": "Load, QoS off", "qos": "Load, QoS on"}
 
-LOG_DIR, GRAPH_DIR, RESULT_DIR = "logs", "graphs", "results"
-ORDER = ["baseline", "congested_noqos", "congested_qos"]
-LABELS = {"baseline": "Baseline\n(no load)",
-          "congested_noqos": "Congested\n(QoS off)",
-          "congested_qos": "Congested\n(QoS on)"}
-COLORS = {"baseline": "tab:green", "congested_noqos": "tab:red", "congested_qos": "tab:blue"}
+os.makedirs("graphs", exist_ok=True)
+os.makedirs("results", exist_ok=True)
 
+logs = {}
+for name in names:
+    files = sorted(glob.glob("logs/" + name + "_*.csv"))
+    if len(files) > 0:
+        logs[name] = [load(f) for f in files]
 
-def load_all():
-    runs = {}                       # scenario -> list of (run_no, dataframe)
-    for path in sorted(glob.glob(os.path.join(LOG_DIR, "*_run*.csv"))):
-        m = re.match(r"(.+)_run(\d+)\.csv$", os.path.basename(path))
-        if not m:
-            continue
-        runs.setdefault(m.group(1), []).append((int(m.group(2)), load_log(path)))
-    if not runs:
-        raise SystemExit(f"No logs found in {LOG_DIR}/. Run fake_data.py or the experiments first.")
-    return runs
+if len(logs) == 0:
+    print("no log files found in logs/")
+    raise SystemExit
 
+rows = []
+for name in logs:
+    for df in logs[name]:
+        row = summary(df)
+        row["scenario"] = name
+        rows.append(row)
 
-def scenarios_present(runs):
-    return [s for s in ORDER if s in runs] + [s for s in runs if s not in ORDER]
+table = pd.DataFrame(rows)
+average = table.groupby("scenario").mean().reindex(list(logs.keys())).round(3)
+average.to_csv("results/summary.csv")
+print(average)
 
+fig, axes = plt.subplots(len(logs), 1, figsize=(9, 3 * len(logs)), sharex=True, sharey=True, squeeze=False)
+i = 0
+for name in logs:
+    df = logs[name][0]
+    start = df["send_ts"].min()
+    for pid in df["player_id"].unique():
+        one = df[df["player_id"] == pid]
+        axes[i][0].plot(one["send_ts"] - start, one["latency"], label="player " + str(pid))
+    axes[i][0].set_title(labels[name])
+    axes[i][0].set_ylabel("latency (ms)")
+    i = i + 1
+axes[0][0].legend()
+axes[-1][0].set_xlabel("time (s)")
+plt.tight_layout()
+plt.savefig("graphs/latency_over_time.png")
+plt.close()
 
-def save(fig, name):
-    fig.tight_layout()
-    fig.savefig(os.path.join(GRAPH_DIR, name), dpi=150)
-    plt.close(fig)
-    print("saved", os.path.join(GRAPH_DIR, name))
-
-
-def plot_latency_over_time(runs, scs):
-    fig, axes = plt.subplots(len(scs), 1, figsize=(9, 2.6 * len(scs)), sharex=True, sharey=True)
-    axes = np.atleast_1d(axes)
-    for ax, s in zip(axes, scs):
-        df = runs[s][0][1].drop_duplicates(["player_id", "seq"])
-        t0 = df["send_ts"].min()
-        for pid, g in df.groupby("player_id"):
-            ax.plot(g["send_ts"] - t0, g["latency_ms"], lw=0.6, alpha=0.8, label=f"player {pid}")
-        ax.set_title(LABELS[s].replace("\n", " ") + f"  (run {runs[s][0][0]})", fontsize=10)
-        ax.set_ylabel("latency (ms)")
-        ax.grid(alpha=0.3)
-    axes[0].legend(loc="upper right", fontsize=8, ncol=3)
-    axes[-1].set_xlabel("time (s)")
-    save(fig, "latency_over_time.png")
-
-
-def plot_cdf(runs, scs):
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    for s in scs:
-        lat = np.sort(pd.concat([d.drop_duplicates(["player_id", "seq"])["latency_ms"] for _, d in runs[s]]))
-        ax.plot(lat, np.arange(1, len(lat) + 1) / len(lat), label=LABELS[s].replace("\n", " "),
-                color=COLORS.get(s))
-    ax.set_xlabel("latency (ms)")
-    ax.set_ylabel("fraction of packets")
-    ax.set_title("Latency CDF (all runs pooled)")
-    ax.grid(alpha=0.3)
-    ax.legend()
-    save(fig, "latency_cdf.png")
+data = []
+for name in logs:
+    data.append(pd.concat([df["latency"] for df in logs[name]]))
+plt.boxplot(data, showfliers=False)
+plt.xticks(range(1, len(data) + 1), [labels[n] for n in logs])
+plt.ylabel("latency (ms)")
+plt.title("Latency per scenario")
+plt.savefig("graphs/latency_boxplot.png")
+plt.close()
 
 
-def plot_box(runs, scs):
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    data = [pd.concat([d.drop_duplicates(["player_id", "seq"])["latency_ms"] for _, d in runs[s]]) for s in scs]
-    ax.boxplot(data, tick_labels=[LABELS[s] for s in scs], showfliers=False)
-    ax.set_ylabel("latency (ms)")
-    ax.set_title("Latency distribution per scenario")
-    ax.grid(axis="y", alpha=0.3)
-    save(fig, "latency_boxplot.png")
+def bar(column, ylabel, filename):
+    plt.bar([labels[n] for n in average.index], average[column])
+    plt.ylabel(ylabel)
+    plt.title(ylabel + " per scenario")
+    plt.savefig("graphs/" + filename)
+    plt.close()
 
 
-def plot_bar(summary, scs, col, ylabel, title, fname):
-    g = summary.groupby("scenario")[col]
-    means, stds = g.mean().reindex(scs), g.std().reindex(scs).fillna(0)
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    bars = ax.bar([LABELS[s] for s in scs], means, yerr=stds, capsize=5,
-                  color=[COLORS.get(s, "gray") for s in scs])
-    for b, v in zip(bars, means):
-        ax.text(b.get_x() + b.get_width() / 2, b.get_height(), f"{v:.2f}", ha="center", va="bottom", fontsize=9)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(axis="y", alpha=0.3)
-    save(fig, fname)
-
-
-def main():
-    os.makedirs(GRAPH_DIR, exist_ok=True)
-    os.makedirs(RESULT_DIR, exist_ok=True)
-    runs = load_all()
-    scs = scenarios_present(runs)
-
-    rows = []
-    for s in scs:
-        for n, df in runs[s]:
-            rows.append({"scenario": s, "run": n, **summarize(df)})
-    summary = pd.DataFrame(rows)
-    summary.to_csv(os.path.join(RESULT_DIR, "summary_per_run.csv"), index=False)
-
-    cols = ["latency_mean_ms", "latency_p95_ms", "latency_max_ms", "jitter_ms", "jitter_rfc3550_ms", "loss_percent"]
-    table = summary.groupby("scenario")[cols].mean().reindex(scs).round(2)
-    table.insert(0, "runs", summary.groupby("scenario").size().reindex(scs))
-    table.to_csv(os.path.join(RESULT_DIR, "summary_table.csv"))
-    print("\nSummary (mean over runs):\n", table.to_string(), "\n")
-
-    plot_latency_over_time(runs, scs)
-    plot_cdf(runs, scs)
-    plot_box(runs, scs)
-    plot_bar(summary, scs, "jitter_ms", "jitter (ms)", "Jitter per scenario (mean of runs, bar = std)", "jitter_bar.png")
-    plot_bar(summary, scs, "loss_percent", "packet loss (%)", "Packet loss per scenario", "loss_bar.png")
-
-
-if __name__ == "__main__":
-    main()
+bar("jitter", "jitter (ms)", "jitter.png")
+bar("loss_percent", "packet loss (%)", "loss.png")
