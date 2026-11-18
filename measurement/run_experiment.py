@@ -1,103 +1,65 @@
-"""
-run_experiment.py - run ONE scenario once inside Mininet and save the log.
-
-Needs root:   sudo python run_experiment.py --scenario congested_qos --run 1 --duration 60
-
-Scenarios
-    baseline          no background traffic
-    congested_noqos   heavy background traffic
-    congested_qos     heavy background traffic
-(QoS on/off is decided by WHICH CONTROLLER IS RUNNING - run_all.sh starts it.
- This script only builds the network, runs game + traffic, and collects the log.)
-
-----------------------------------------------------------------------------
-WHAT THIS FILE ASSUMES FROM TEAMMATES  (edit the CONFIG block if they differ)
-  Student B: sdn/topology.py has   build_net() -> Mininet net   (already started with a
-             remote controller, 10 Mbps bottleneck) with hosts named below.
-  Student A: game/server.py and game/client.py accept the arguments in the
-             command templates below, and the SERVER writes the CSV log
-             (columns: player_id,seq,send_ts,recv_ts) to the path given by --log.
-----------------------------------------------------------------------------
-"""
 import argparse
 import os
+import subprocess
 import sys
 import time
 
-# ---------------------------- CONFIG ---------------------------------------
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(REPO, "sdn"))            # so we can import B's topology.py
-sys.path.insert(0, os.path.dirname(__file__))            # congestion.py
+here = os.path.dirname(os.path.abspath(__file__))
+sdn_folder = os.path.join(here, "..", "sdn")
+sys.path.insert(0, sdn_folder)
+from topology import build
 
-PLAYER_HOSTS = ["p1", "p2", "p3"]       # host names in B's topology
-SERVER_HOST = "srv"
-BG_HOST, SINK_HOST = "bg", "sink"
-GAME_PORT = 5000
-GAME_DIR = os.path.join(REPO, "game")
+parser = argparse.ArgumentParser()
+parser.add_argument("scenario", choices=["baseline", "noqos", "qos"])
+parser.add_argument("run", type=int)
+parser.add_argument("duration", type=int)
+args = parser.parse_args()
 
-# {ip} {port} {log} {pid} {duration} are filled in below. Change to match A's CLI.
-SERVER_CMD = "python3 {game}/server.py --port {port} --log {log} --duration {duration}"
-CLIENT_CMD = "python3 {game}/client.py --server {ip} --port {port} --id {pid} --duration {duration}"
+runner = os.path.join(here, "game_runner.py")
+name = args.scenario + "_" + str(args.run)
+log_file = os.path.join(here, "logs", name + ".csv")
+flows_file = os.path.join(here, "results", "flows_" + name + ".txt")
+os.makedirs(os.path.join(here, "logs"), exist_ok=True)
+os.makedirs(os.path.join(here, "results"), exist_ok=True)
 
-SCENARIO_LOAD = {"baseline": "none", "congested_noqos": "heavy", "congested_qos": "heavy"}
-WARMUP, COOLDOWN = 3, 3                  # seconds
-# ---------------------------------------------------------------------------
+net = build()
+net.start()
+if not net.waitConnected(timeout=20):
+    print("switches did not connect to the controller")
+    net.stop()
+    sys.exit(1)
 
-import congestion
+subprocess.run(["bash", os.path.join(sdn_folder, "setup_queues.sh"), "s1-eth5"])
+time.sleep(2)
 
+flows = subprocess.run(["ovs-ofctl", "-O", "OpenFlow13", "dump-flows", "s1"], capture_output=True, text=True)
+open(flows_file, "w").write(flows.stdout)
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--scenario", required=True, choices=SCENARIO_LOAD)
-    ap.add_argument("--run", type=int, default=1)
-    ap.add_argument("--duration", type=int, default=60)
-    ap.add_argument("--load", choices=list(congestion.INTENSITY_MBPS), help="override background load")
-    args = ap.parse_args()
+server = net.get("server")
+players = [net.get("p1"), net.get("p2"), net.get("p3")]
+bgsrc = net.get("bgsrc")
+bgsink = net.get("bgsink")
 
-    load = args.load or SCENARIO_LOAD[args.scenario]
-    os.makedirs(os.path.join(os.path.dirname(__file__), "logs"), exist_ok=True)
-    log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "logs",
-                                            f"{args.scenario}_run{args.run}.csv"))
+net.pingAll()
 
-    from topology import build_net            # Student B's file
-    net = build_net()
-    try:
-        srv = net.get(SERVER_HOST)
-        players = [net.get(h) for h in PLAYER_HOSTS]
-        bg, sink = net.get(BG_HOST), net.get(SINK_HOST)
+server.cmd("cd /tmp && python3 %s server --port 5000 --log %s --duration %d > /tmp/server_out.txt 2>&1 &"
+           % (runner, log_file, args.duration + 10))
+time.sleep(1)
 
-        print("[C] checking connectivity ...")
-        if net.pingAll() > 0:
-            sys.exit("[C] ping failed: check B's topology/controller before running experiments")
+number = 1
+for p in players:
+    p.cmd("cd /tmp && python3 %s client --server 10.0.0.10 --name P%d --duration %d > /tmp/client%d_out.txt 2>&1 &"
+          % (runner, number, args.duration + 5, number))
+    number = number + 1
+time.sleep(3)
 
-        run_time = args.duration + WARMUP + COOLDOWN
-        print(f"[C] scenario={args.scenario} load={load} run={args.run} -> {log_path}")
+if args.scenario != "baseline":
+    bgsink.cmd("iperf -s -u > /dev/null 2>&1 &")
+    bgsrc.cmd("iperf -c 10.0.0.21 -u -b 20M -t %d > /dev/null 2>&1 &" % args.duration)
 
-        srv.cmd(SERVER_CMD.format(game=GAME_DIR, port=GAME_PORT, log=log_path, duration=run_time)
-                + " > /tmp/server_out.log 2>&1 &")
-        time.sleep(1)
+time.sleep(args.duration + 8)
 
-        for i, p in enumerate(players, start=1):
-            p.cmd(CLIENT_CMD.format(game=GAME_DIR, ip=srv.IP(), port=GAME_PORT, pid=i, duration=run_time)
-                  + f" > /tmp/client{i}_out.log 2>&1 &")
-
-        time.sleep(WARMUP)                     # let players join before the load starts
-        congestion.start(bg, sink, load, args.duration)
-        time.sleep(args.duration + COOLDOWN + 2)
-
-        congestion.stop(bg, sink)
-        srv.cmd("pkill -f server.py ; true")
-        for p in players:
-            p.cmd("pkill -f client.py ; true")
-        time.sleep(1)
-    finally:
-        net.stop()
-
-    if os.path.exists(log_path):
-        print(f"[C] done: {log_path}")
-    else:
-        sys.exit("[C] no log file was written: check /tmp/server_out.log and A's --log option")
-
-
-if __name__ == "__main__":
-    main()
+subprocess.run(["pkill", "-f", "iperf"])
+subprocess.run(["pkill", "-f", "game_runner.py"])
+net.stop()
+print("saved", log_file)
