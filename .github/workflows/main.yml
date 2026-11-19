@@ -21,7 +21,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y mininet openvswitch-switch iperf python3-pip
-          sudo pip3 install ryu "eventlet==0.30.2" pandas matplotlib numpy
+          sudo pip3 install pandas matplotlib numpy uv
+          sudo uv venv --python 3.9 /opt/ryu-env
+          sudo uv pip install --python /opt/ryu-env/bin/python "setuptools<66" wheel pbr
+          sudo uv pip install --python /opt/ryu-env/bin/python --no-build-isolation ryu "eventlet==0.30.2"
+          /opt/ryu-env/bin/ryu-manager --version
           sudo service openvswitch-switch start || true
           sudo modprobe openvswitch || true
 
@@ -51,7 +55,7 @@ jobs:
       - name: Run all scenarios
         run: |
           cd measurement
-          sudo env "PATH=$PATH" ./run_all.sh "${{ inputs.runs }}" "${{ inputs.duration }}"
+          sudo env RYU=/opt/ryu-env/bin/ryu-manager "PATH=$PATH" ./run_all.sh "${{ inputs.runs }}" "${{ inputs.duration }}"
 
       - name: Save results
         if: always()
