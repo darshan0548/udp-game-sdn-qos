@@ -25,7 +25,7 @@ jobs:
           sudo uv venv --python 3.9 /opt/ryu-env
           sudo uv pip install --python /opt/ryu-env/bin/python "setuptools<66" wheel pbr
           sudo uv pip install --python /opt/ryu-env/bin/python --no-build-isolation ryu "eventlet==0.30.2"
-          /opt/ryu-env/bin/ryu-manager --version
+          sudo /opt/ryu-env/bin/ryu-manager --version
           sudo service openvswitch-switch start || true
           sudo modprobe openvswitch || true
 
