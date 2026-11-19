@@ -9,7 +9,7 @@ run_scenario() {
   for n in $(seq 1 $runs); do
     echo "== $scenario run $n =="
     sudo mn -c > /dev/null 2>&1
-    ryu-manager $controller > /tmp/ryu_$scenario.txt 2>&1 &
+    ${RYU:-ryu-manager} $controller > /tmp/ryu_$scenario.txt 2>&1 &
     ryu_pid=$!
     sleep 5
     sudo python3 run_experiment.py $scenario $n $duration
