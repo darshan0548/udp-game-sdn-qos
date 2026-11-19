@@ -1,0 +1,4 @@
+scenario,latency_avg,latency_p95,latency_max,jitter,lost,loss_percent,duplicates
+baseline,0.231,0.457,1.41,0.11,0.0,0.0,0.0
+noqos,79.304,113.56,114.027,19.403,0.0,0.0,0.0
+qos,0.185,0.372,1.12,0.087,0.0,0.0,0.0
