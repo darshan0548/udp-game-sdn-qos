@@ -32,9 +32,6 @@ if not net.waitConnected(timeout=20):
 subprocess.run(["bash", os.path.join(sdn_folder, "setup_queues.sh"), "s1-eth5"])
 time.sleep(2)
 
-flows = subprocess.run(["ovs-ofctl", "-O", "OpenFlow13", "dump-flows", "s1"], capture_output=True, text=True)
-open(flows_file, "w").write(flows.stdout)
-
 server = net.get("server")
 players = [net.get("p1"), net.get("p2"), net.get("p3")]
 bgsrc = net.get("bgsrc")
@@ -58,6 +55,9 @@ if args.scenario != "baseline":
     bgsrc.cmd("iperf -c 10.0.0.21 -u -b 20M -t %d > /dev/null 2>&1 &" % args.duration)
 
 time.sleep(args.duration + 8)
+
+flows = subprocess.run(["ovs-ofctl", "-O", "OpenFlow13", "dump-flows", "s1"], capture_output=True, text=True)
+open(flows_file, "w").write(flows.stdout)
 
 subprocess.run(["pkill", "-f", "iperf"])
 subprocess.run(["pkill", "-f", "game_runner.py"])
